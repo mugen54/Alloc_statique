@@ -58,6 +58,10 @@ static void *static_malloc(size_t taille)
     size_t nb_octets = 0;
     t_block *premier_block_init = (t_block *)mem;
     t_block *free_block_head = NULL;
+    t_block *free_block_tail = NULL;
+    t_block *next_free_block = NULL;
+    size_t head_taille = 0;
+    bool bloc_trouve = false;
 
     // Checker si on a déjà un premier bloc
     if (!(premier_block))
@@ -68,59 +72,67 @@ static void *static_malloc(size_t taille)
         bloc->libre = 0;
         bloc->suivant = (t_block *)((char *)bloc + aligner(sizeof(t_block)) + (aligner(taille)));
         curseur = bloc->suivant;
+        if ((char *)curseur > (char *)mem + MEX_MAX)
+        {
+            fprintf(stderr, "plus d'espace disponible\n");
+            return NULL;
+        }
         alloue = (t_block *)((char *)bloc + (aligner(sizeof(t_block))));
         premier_block = true;
     }
 
-    else
+    else // SI il y'a eu une première allocation effectuée
     {
         if (free_block != NULL) // Si il y'a des blocs libres dispos
         {
             free_block_head = free_block;
+            free_block_tail = free_block;
+            head_taille = free_block_tail->taille;
+            next_free_block = free_block_tail->suivant;
+
             if (taille <= free_block_head->taille) // Si la taille correspond et qu'on peut l'allouer
             {
-                bloc = free_block;
-                bloc->taille = taille;
-                if (bloc == NULL)
-                {
-                    fprintf(stderr, "IL n'y a plus d'espace disponible \n");
-                    return NULL;
-                }
-                alloue = (t_block *)((char *)bloc + aligner(sizeof(t_block)));
-                bloc->suivant = (t_block *)((char *)bloc + aligner(sizeof(t_block)) + (aligner(taille)));
+                free_block_head->taille = taille;
+                alloue = (t_block *)((char *)free_block_head + aligner(sizeof(t_block)));
                 free_block = free_block->suivant;
             }
 
             else // Si taille supérieure
             {
-                temp = free_block;
-                bloc = free_block;
-                free_block_head = (t_block *)((char *)bloc - aligner(sizeof(t_block)));
-                while ((bloc != NULL) && (free_block_head->taille >= taille))
+                while (free_block_tail != NULL)
                 {
-                    temp = free_block->suivant;
-                    bloc = temp;
-                    free_block_head = (t_block *)((char *)bloc - aligner(sizeof(t_block)));
+                    if (((char *)free_block_tail + aligner(sizeof(t_block)) + aligner(head_taille)) == (char *)next_free_block)
+                    {
+                        if (taille >= head_taille)
+                        {
+                            alloue = (t_block *)((char *)free_block_head + (aligner(sizeof(t_block))));
+                            free_block_head->taille = taille;
+                            free_block = next_free_block;
+                            break;
+                        }
+                    }
+
+                    free_block_tail = next_free_block;
+                    next_free_block = free_block_tail->suivant;
+                    head_taille += free_block_tail->taille;
                 }
 
-                if (bloc == NULL) // ON a rien trouvé
+                bloc = curseur;
+                bloc->suivant = (t_block *)((char *)bloc + aligner(sizeof(t_block)) + (aligner(taille)));
+                bloc->taille = taille;
+                curseur = bloc->suivant;
+                if ((char *)curseur > (char *)mem + MEX_MAX)
                 {
-                    bloc = curseur;
-                    alloue = bloc;
-                }
-
-                else // On a trouvé un bloc qui correspond
-                {
-                    free_block = free_block->suivant;
-                    alloue = (t_block *)((char *)bloc + aligner(sizeof(t_block)));
-                    bloc->taille = taille;
-                }
-
-                if (bloc == NULL)
-                {
-                    fprintf(stderr, "IL n'y a plus d'espace disponible \n");
+                    fprintf(stderr, "plus d'espace disponible\n");
                     return NULL;
                 }
+                alloue = (t_block *)((char *)bloc + (aligner(sizeof(t_block))));
+            }
+
+            if (bloc == NULL)
+            {
+                fprintf(stderr, "IL n'y a plus d'espace disponible \n");
+                return NULL;
             }
         }
 
@@ -131,74 +143,128 @@ static void *static_malloc(size_t taille)
             bloc->taille = taille;
             curseur = bloc->suivant;
             alloue = (t_block *)((char *)bloc + (aligner(sizeof(t_block))));
+            if ((char *)alloue > ((char *)mem + MEX_MAX))
+            {
+                fprintf(stderr, "IL n'y a plus d'espace disponible \n");
+                return NULL;
+            }
         }
-
-        if ((t_block *)((char *)bloc + (sizeof(t_block)) + aligner(taille)) > (t_block *)((char *)mem + MEX_MAX))
-        {
-            fprintf(stderr, "IL n'y a plus d'espace disponible \n");
-            return NULL;
-            t_block *curseur = NULL;
-        }
-
-        // bloc->suivant = (t_block *)((char *)bloc + aligner(sizeof(t_block)) + aligner(taille)); // alloue = (t_block *)((char *)bloc + (aligner(sizeof(t_block))));
     }
-    // Checker si libre = 0
 
     return alloue;
 }
 
 void static_free(void *ptr)
 {
-    void *temp = NULL;
+
+    t_block *temp = NULL;
+    t_block *bloc = (t_block *)((char *)ptr - aligner(sizeof(t_block)));
 
     if (!premier_free)
     {
-        free_block = (t_block *)((char *)ptr - aligner(sizeof(t_block)));
+
+        free_block = bloc;
         free_block->suivant = NULL;
         nb_pointeurs--;
         premier_free = true;
     }
 
-    else
+    else // Si un premier free a déjà eu lieu
     {
-        temp = free_block;
+        temp = (t_block *)free_block;
+        while (temp != NULL)
+        {
+            if (((char *)ptr > (char *)temp) && ((char *)ptr) < (char *)temp->suivant)
+            {
+                temp = temp->suivant;
+                temp->suivant = ptr;
+                bloc->suivant = temp;
+                break;
+            }
+
+            else if ((char *)ptr < (char *)free_block)
+            {
+                free_block = ptr;
+                free_block->suivant = temp;
+                break;
+            }
+
+            else
+            {
+                temp->suivant = ptr;
+            }
+
+            temp = temp->suivant;
+        }
+
         free_block = ptr;
         free_block->suivant = temp;
-        nb_pointeurs--;
     }
 
     if (nb_pointeurs == 0)
+    {
         premier_free = false;
+        premier_block = false;
+    }
 }
 
-int verifier_nombre(int nombre)
+int verifier_nombre(void)
 {
-    while (scanf("%d", &nombre) != 1)
+    int nombre = 0;
+    char buffer[64];
+    int valide = 1;
+
+    while (1)
     {
-        while (getchar() != '\n')
-            ;
+        fgets(buffer, sizeof(buffer), stdin);
+        buffer[strcspn(buffer, "\n")] = 0; // supprime \n
+
+        for (int i = 0; buffer[i] != '\0'; i++)
+        {
+            if (!isdigit(buffer[i]))
+            {
+                valide = 0;
+                break;
+            }
+        }
+
+        if ((valide) && (sscanf(buffer, "%d", &nombre) == 1))
+            return nombre;
+
         printf("Veuillez rentrer un seul nombre valide : ");
     }
-
-    return nombre;
 }
 
 char *verifier_nom(char *s)
 {
-    while (fgets(s, sizeof(s), stdin) != NULL)
-    {
-        if (sscanf(s, "%63s", s) == 1)
-            break;
-        printf("Veuillez rentrer une chaine valide : ");
-    }
+    char buffer[64];
+    int valide = 1;
 
-    return s;
+    while (1)
+    {
+        valide = 1;
+        fgets(buffer, sizeof(buffer), stdin);
+        buffer[strcspn(buffer, "\n")] = 0;
+
+        for (int i = 0; buffer[i] != '\0'; i++)
+        {
+            if (!isalnum(buffer[i]))
+            {
+                valide = 0;
+                break;
+            }
+        }
+        if (valide && sscanf(buffer, "%63s", s) == 1)
+            return s;
+        printf("Veuillez rentrer un nom valide (lettres uniquement) : ");
+    }
 }
 
 int main()
 {
     int octets = 0;
     int choix = 0;
+    char nom_ptr[64];
     char buffer[64];
     t_pointeur pointeurs[100]; // Tableau de 100 pointeurs max
 
@@ -207,7 +273,7 @@ int main()
     do
     {
         printf("Choissiez 0 pour arreter, 1 pour malloc ou 2 pour free. \n");
-        choix = verifier_nombre(choix);
+        choix = verifier_nombre();
         switch (choix)
         {
         case 0:
@@ -215,10 +281,16 @@ int main()
         case 1:
             printf("Nom du pointeur que vous voulez allouer : ");
             verifier_nom(buffer);
-            sscanf(buffer, "%63s", pointeurs[nb_pointeurs].nom);
-
+            for (int i = 0; i < nb_pointeurs; i++)
+            {
+                if (pointeurs[i].ptr = NULL)
+                {
+                    sscanf(buffer, "%63s", pointeurs[nb_pointeurs].nom);
+                    break;
+                }
+            }
             printf("Combien de mémoire voulez vous allouer ? ");
-            octets = verifier_nombre(octets);
+            octets = verifier_nombre();
             pointeurs[nb_pointeurs].ptr = static_malloc(octets);
             printf("\n");
             printf("Allouée : %p \n", pointeurs[nb_pointeurs].ptr);
@@ -229,11 +301,17 @@ int main()
         case 2:
             printf("Quel pointeur voulez vous  libérer ? ");
             verifier_nom(buffer);
-            for (int i = 0; i < nb_pointeurs; i++)
+            for (int i = 0; pointeurs[i].ptr != NULL; i++)
             {
                 if (strcmp(pointeurs[i].nom, buffer) == 0)
                 {
                     static_free(pointeurs[i].ptr);
+                    for (int j = i; j < nb_pointeurs - 1; j++)
+                        pointeurs[j] = pointeurs[j + 1];
+
+                    memset(pointeurs[nb_pointeurs - 1].nom, 0, sizeof(pointeurs[nb_pointeurs - 1].nom));
+                    pointeurs[nb_pointeurs - 1].ptr = NULL;
+                    nb_pointeurs--;
                     break;
                 }
             }
